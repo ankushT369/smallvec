@@ -17,13 +17,12 @@ const std = @import("std");
 /// - Inline storage increases the size of the struct.
 /// - Large element types or large capacities can lead to high stack usage.
 pub fn SmallVec(comptime T: type, comptime capacity: usize) type {
-    return struct{
+    return struct {
         const Self = @This();
 
         data: [capacity]T,
         capacity: usize,
         length: PackedLen,
-
 
         pub fn init() Self {
             return Self{
@@ -70,7 +69,7 @@ pub fn SmallVec(comptime T: type, comptime capacity: usize) type {
         }
 
         pub fn isEmpty(self: *Self) bool {
-            return self.length.unPackLen() == 0; 
+            return self.length.unPackLen() == 0;
         }
 
         pub fn len(self: *Self) usize {
@@ -85,11 +84,10 @@ pub fn SmallVec(comptime T: type, comptime capacity: usize) type {
             return self.capacity <= self.length.unPackLen();
         }
     };
-
 }
 
 /// PackedLen is a packed form of length and on_heap, instead of wasting
-/// space for len(usize 8 bytes) and is_heap(bool 1 byte) is 9 bytes with 
+/// space for len(usize 8 bytes) and is_heap(bool 1 byte) is 9 bytes with
 /// padding it will form total of 16 bytes.
 ///
 /// [usize........8 bytes][bool 1 byte][padding 7 bytes] = 16 bytes.
@@ -101,9 +99,7 @@ const PackedLen = struct {
     packed_len_and_heap: usize,
 
     fn init(len: usize) Self {
-        return Self{
-            .packed_len_and_heap = pack(len, false)
-        };
+        return Self{ .packed_len_and_heap = pack(len, false) };
     }
     fn pack(len: usize, on_heap: bool) usize {
         return (len << 1) | @intFromBool(on_heap);
@@ -118,11 +114,11 @@ const PackedLen = struct {
     }
 
     fn increaseLen(self: *Self) void {
-        self.packed_len_and_heap += 2; 
+        self.packed_len_and_heap += 2;
     }
 
     fn decreaseLen(self: *Self) void {
-        self.packed_len_and_heap -= 2; 
+        self.packed_len_and_heap -= 2;
     }
 
     fn setHeap(self: *Self) void {
