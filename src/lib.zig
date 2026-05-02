@@ -16,51 +16,53 @@ const std = @import("std");
 /// Note:
 /// - Inline storage increases the size of the struct.
 /// - Large element types or large capacities can lead to high stack usage.
-pub fn SmallVec(comptime T: type, comptime capacity: usize) type {
+pub inline fn SmallVec(comptime T: type, comptime capacity: usize) type {
     return struct {
         const Self = @This();
 
-        data: [capacity]T,
         capacity: usize,
-        length: PackedLen,
+        metadata: Packed,
+        data: [capacity]T,
 
         pub fn init() Self {
             return Self{
                 .data = undefined,
                 .capacity = capacity,
-                .length = PackedLen.init(0),
+                .metadata = Packed.init(),
             };
         }
 
-        pub fn push(self: *Self, value: T) !void {
-            if (self.checkIfLenExceedsCapacity()) {
+        pub fn push(self: *Self, value: T) void {
+            if (self.checkIfLenEqualOrExceedsCapacity()) {
                 // later handle this for heap allocation
-                return error.Full;
+                return ;
             }
 
-            self.data[self.length.unPackLen()] = value;
-            self.length.increaseLen();
+            self.data[self.metadata.unpackLen()] = value;
+            self.metadata.growLength();
 
             return;
         }
 
-        pub fn pop(self: *Self) !void {
-            if (self.isEmpty()) {
-                return error.Full;
-            }
+        pub fn pop(self: *Self) ?T {
+            var ret: ?T = null;
 
-            if (self.checkIfLenExceedsCapacity()) {
+            if (self.isEmpty()) return ret;
+
+            if (self.metadata.unpackIsHeap()) {
                 // If data is on heap we have to deallocate it for now its now implemented
-                return error.Full;
+                return ret;
             }
 
-            self.data[self.length.unPackLen()] = 0;
-            self.length.decreaseLen();
+            ret = self.data[self.metadata.unpackLen() - 1];
+            self.metadata.shrinkLength();
 
-            return;
+            return ret;
         }
 
         pub fn get(self: *Self, index: usize) T {
+            if (index >= self.len()) @panic("index out of bounds");
+
             return self.data[index];
         }
 
@@ -68,25 +70,25 @@ pub fn SmallVec(comptime T: type, comptime capacity: usize) type {
             self.data[index] = value;
         }
 
-        pub fn isEmpty(self: *Self) bool {
-            return self.length.unPackLen() == 0;
+        pub inline fn isEmpty(self: *Self) bool {
+            return self.metadata.unpackLen() == 0;
         }
 
         pub fn len(self: *Self) usize {
-            return self.length.unPackLen();
+            return self.metadata.unpackLen();
         }
 
         pub fn spilled(self: *Self) bool {
-            return self.length.unPackIsHeap();
+            return self.metadata.unpackIsHeap();
         }
 
-        fn checkIfLenExceedsCapacity(self: *Self) bool {
-            return self.capacity <= self.length.unPackLen();
+        fn checkIfLenEqualOrExceedsCapacity(self: *Self) bool {
+            return self.capacity <= self.metadata.unpackLen();
         }
     };
 }
 
-/// PackedLen is a packed form of length and on_heap, instead of wasting
+/// Packed is a packed form of len and on_heap, instead of wasting
 /// space for len(usize 8 bytes) and is_heap(bool 1 byte) is 9 bytes with
 /// padding it will form total of 16 bytes.
 ///
@@ -94,77 +96,100 @@ pub fn SmallVec(comptime T: type, comptime capacity: usize) type {
 ///
 /// I packed it up by applying bitwise operator. It uses the most significant bit
 /// which is also known as sign bit as is_heap (bool).
-const PackedLen = struct {
+///
+/// [usize..............x] = 8 bytes
+///                     ^
+///                     This bit represents boolean
+///
+const Packed = struct {
     const Self = @This();
-    packed_len_and_heap: usize,
+    packed_data: usize,
 
-    fn init(len: usize) Self {
-        return Self{ .packed_len_and_heap = pack(len, false) };
+    fn init() Self {
+        return Self{ .packed_data = pack(0, false) };
     }
-    fn pack(len: usize, on_heap: bool) usize {
+
+    /// Returns packed (len and on_heap)
+    /// Encodes `len` and `on_heap` into a single usize using bit packing.
+    /// Bit 0 stores heap flag, remaining bits store length.
+    inline fn pack(len: usize, on_heap: bool) usize {
         return (len << 1) | @intFromBool(on_heap);
     }
 
-    fn unPackLen(self: *Self) usize {
-        return self.packed_len_and_heap >> 1;
+    inline fn store(self: *Self, packed_data: usize) void {
+        self.packed_data = packed_data;
     }
 
-    fn unPackIsHeap(self: *Self) bool {
-        return (self.packed_len_and_heap & 1) == 1;
+    /// unpack*() are read-only functions used to read len or on_heap status
+    inline fn unpackLen(self: *Self) usize {
+        return self.packed_data >> 1;
     }
 
-    fn increaseLen(self: *Self) void {
-        self.packed_len_and_heap += 2;
+    inline fn unpackIsHeap(self: *Self) bool {
+        return (self.packed_data & 1) == 1;
     }
 
-    fn decreaseLen(self: *Self) void {
-        self.packed_len_and_heap -= 2;
+    /// Mutates the packed state:
+    /// - increase/decrease modify length 
+    /// - setHeap/unsetHeap modify heap flag
+    inline fn growLength(self: *Self) void {
+        var len: usize = self.unpackLen();
+        len += 1;
+        self.store(pack(len, self.unpackIsHeap()));
     }
 
-    fn setHeap(self: *Self) void {
-        self.packed_len_and_heap |= 1;
+    inline fn shrinkLength(self: *Self) void {
+        var len: usize = self.unpackLen();
+        len -= 1;
+        self.store(pack(len, self.unpackIsHeap()));
     }
 
-    fn unsetHeap(self: *Self) void {
-        self.packed_len_and_heap &= ~@as(usize, 1);
+    inline fn setHeap(self: *Self) void {
+        var on_heap: bool = self.unpackIsHeap();
+        on_heap = true;
+        self.store(pack(self.unpackLen(), on_heap));
+    }
+
+    inline fn unsetHeap(self: *Self) void {
+        var on_heap: bool = self.unpackIsHeap();
+        on_heap = false; 
+        self.store(pack(self.unpackLen(), on_heap));
     }
 };
 
 // Test cases
-test "smallvec push pop test for unsigned 32-bit" {
-    const Vec = SmallVec(u32, 5);
+test "smallvec test for unsigned 32-bit integer" {
+    std.debug.print("Testing for unsigned 32-bit integer \n", .{});
 
+    const Vec = SmallVec(u32, 5);
     var v = Vec.init();
 
-    try v.push(10);
-    try v.push(20);
-    try v.push(30);
-    try v.push(30);
+    v.push(321);
+    v.push(25346);
+    v.push(843);
+    v.push(903);
 
     try std.testing.expect(v.len() == @as(usize, 4));
+    std.debug.print("✓ Passed Test 1 \n", .{});
 
-    try v.pop();
-    try v.pop();
-
+    _ = v.pop().?;
+    _ = v.pop().?;
     try std.testing.expect(v.len() == @as(usize, 2));
-}
+    std.debug.print("✓ Passed Test 2 \n", .{});
 
-test "smallvec get set test unsigned 32-bit" {
-    const Vec = SmallVec(u32, 5);
+    v.push(13213);
+    v.push(6478);
+    try std.testing.expect(v.get(3) == @as(u32, 6478));
+    std.debug.print("✓ Passed Test 3 \n", .{});
 
-    var v = Vec.init();
-
-    try v.push(10);
-    try v.push(20);
-    try v.push(30);
-    try v.push(30);
-
-    try std.testing.expect(v.get(3) == @as(u32, 30));
-    try std.testing.expect(v.get(1) == @as(u32, 20));
+    try std.testing.expect(v.get(1) == @as(u32, 25346));
+    std.debug.print("✓ Passed Test 4 \n", .{});
 
     try v.set(1, 436);
     try std.testing.expect(v.get(1) == @as(u32, 436));
+    std.debug.print("✓ Passed Test 5 \n", .{});
 
     try v.set(0, 893);
     try std.testing.expect(v.get(0) == @as(u32, 893));
+    std.debug.print("✓ Passed Test 6 \n", .{});
 }

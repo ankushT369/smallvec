@@ -6,12 +6,16 @@ pub fn main() !void {
 
     var v = Vec.init();
 
-    try v.push(10);
-    try v.push(20);
-    try v.push(30);
-    try v.push(30);
+    v.push(10);
+    v.push(20);
+    v.push(30);
+    v.push(30);
 
     std.debug.print("len before = {}\n", .{v.len()});
-    try v.pop();
-    std.debug.print("len after = {}\n", .{v.len()});
+
+    if (v.pop()) |val| {
+        std.debug.print("val = {}\n", .{val});
+    } else {
+        std.debug.print("empty \n", .{});
+    }
 }
