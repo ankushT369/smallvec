@@ -1,89 +1,138 @@
 //! lib.zig provides a SmallVec implementation
 //!
-//! A SmallVec stores small amount of elements (usually small) inline
-//! to avoid heap allocation. If the threshold for inline elements increase
+//! A SmallVec stores small amount of elements (usually small) in the stack memory
+//! to avoid heap allocation. If the threshold for stack elements increase
 //! the it fallbacks to heap based allocation.
 //!
 //! This is useful for performance-critical code where most needed vectors are small.
 const std = @import("std");
 
-/// A hybrid vector that stores elements inline up to a fixed capacity,
+/// A hybrid vector that stores elements into stack up to a fixed capacity,
 /// and spills to the heap when that capacity is exceeded.
 ///
-/// The inline capacity is determined at compile time. This avoids heap
+/// The stack capacity is determined at compile time. This avoids heap
 /// allocations for small workloads while still allowing growth.
 ///
 /// Note:
-/// - Inline storage increases the size of the struct.
+/// - stack storage increases the size of the struct.
 /// - Large element types or large capacities can lead to high stack usage.
-pub inline fn SmallVec(comptime T: type, comptime capacity: usize) type {
+pub fn SmallVec(comptime T: type, comptime cap: usize) type {
     return struct {
         const Self = @This();
 
-        capacity: usize,
-        metadata: Packed,
-        data: [capacity]T,
+        length: Packed,
+        data: union(enum) {
+            stack: [cap]T,
+            heap: []T,
+        },
 
+        /// User API for SmallVec
         pub fn init() Self {
-            return Self{
-                .data = undefined,
-                .capacity = capacity,
-                .metadata = Packed.init(),
+            return .{
+                .length = Packed.pack(0, false, isZst()),
+                .data = .{ .stack = undefined },
             };
         }
 
-        pub fn push(self: *Self, value: T) void {
-            if (self.checkIfLenEqualOrExceedsCapacity()) {
-                // later handle this for heap allocation
-                return ;
-            }
-
-            self.data[self.metadata.unpackLen()] = value;
-            self.metadata.growLength();
-
+        pub fn push(self: *Self, value: T) !void {
+            try self.writeMem(value);
+            self.setLen(self.length.value(isZst()) + 1);
             return;
         }
 
         pub fn pop(self: *Self) ?T {
             var ret: ?T = null;
-
             if (self.isEmpty()) return ret;
 
-            if (self.metadata.unpackIsHeap()) {
-                // If data is on heap we have to deallocate it for now its now implemented
-                return ret;
-            }
-
-            ret = self.data[self.metadata.unpackLen() - 1];
-            self.metadata.shrinkLength();
-
+            ret = self.readMem();
             return ret;
         }
 
-        pub fn get(self: *Self, index: usize) T {
-            if (index >= self.len()) @panic("index out of bounds");
-
-            return self.data[index];
+        pub fn spilled(self: *Self) bool {
+            return self.length.onHeap(isZst());
         }
 
-        pub fn set(self: *Self, index: usize, value: T) !void {
-            self.data[index] = value;
-        }
-
-        pub inline fn isEmpty(self: *Self) bool {
-            return self.metadata.unpackLen() == 0;
+        pub fn capacity() usize {
+            // Return based on the heap or stack.
+            return cap;
         }
 
         pub fn len(self: *Self) usize {
-            return self.metadata.unpackLen();
+            return self.length.value(isZst());
         }
 
-        pub fn spilled(self: *Self) bool {
-            return self.metadata.unpackIsHeap();
+        pub inline fn isEmpty(self: *Self) bool {
+            return self.len() == 0;
         }
 
-        fn checkIfLenEqualOrExceedsCapacity(self: *Self) bool {
-            return self.capacity <= self.metadata.unpackLen();
+        inline fn writeMem(self: *Self, value: T) !void {
+            if (inlineCapacity() == self.length.value(isZst()))
+                if (!self.length.onHeap(isZst()))
+                    try self.spillToHeap();
+
+            if (isZst()) {
+                // Do nothing
+                return;
+            } else {
+                if (self.length.onHeap(isZst()))
+                    self.data.heap[self.length.value(isZst())] = value
+                else
+                    self.data.stack[self.length.value(isZst())] = value;
+
+                return;
+            }
+        }
+
+        inline fn readMem(self: *Self) T {
+            if (isZst()) {
+                // right now return undefined
+                return undefined;
+            } else {
+                if (self.length.onHeap(isZst()))
+                    return self.data.heap[self.length.value(isZst()) - 1]
+                else
+                    return self.data.stack[self.length.value(isZst()) - 1];
+            }
+        }
+
+        /// Below isZst() and inlineCapacity() are complete static funtions depends on
+        /// its current comp time defined capacity.
+        inline fn isZst() bool {
+            return cap == 0;
+        }
+
+        inline fn inlineCapacity() usize {
+            return cap;
+        }
+
+        inline fn setOnHeap(self: *Self) void {
+            self.length = Packed.pack(self.len(), true, isZst());
+        }
+
+        inline fn setInline(self: *Self) void {
+            self.length = Packed.pack(self.len(), false, isZst());
+        }
+
+        inline fn setLen(self: *Self, new_len: usize) void {
+            // std.debug.assert(new_len <= capacity());
+            const on_heap: bool = self.length.onHeap(isZst());
+            self.length = Packed.pack(new_len, on_heap, isZst());
+        }
+
+        inline fn spillToHeap(self: *Self) !void {
+            const allocator = std.heap.smp_allocator;
+
+            const old_len = self.len();
+            const new_cap = 2 * inlineCapacity();
+
+            const heap_mem = try allocator.alloc(T, new_cap);
+            const stack_slice = self.data.stack[0..old_len];
+
+            std.mem.copyForwards(T, heap_mem[0..old_len], stack_slice);
+
+            self.data.heap = heap_mem;
+            // I have stack memory on self.data.heap and size of cap(comp time)
+            self.setOnHeap();
         }
     };
 }
@@ -105,55 +154,34 @@ const Packed = struct {
     const Self = @This();
     packed_data: usize,
 
-    fn init() Self {
-        return Self{ .packed_data = pack(0, false) };
-    }
-
     /// Returns packed (len and on_heap)
     /// Encodes `len` and `on_heap` into a single usize using bit packing.
     /// Bit 0 stores heap flag, remaining bits store length.
-    inline fn pack(len: usize, on_heap: bool) usize {
-        return (len << 1) | @intFromBool(on_heap);
+    /// if the datatype len is zero then we store only len orelse bit packing.
+    inline fn pack(len: usize, on_heap: bool, is_zst: bool) Self {
+        if (is_zst) {
+            std.debug.assert(!on_heap);
+            return .{ .packed_data = len };
+        } else {
+            std.debug.assert(len < @as(usize, std.math.maxInt(isize)));
+            return .{
+                .packed_data = (len << 1) | @as(usize, @intFromBool(on_heap)),
+            };
+        }
     }
 
-    inline fn store(self: *Self, packed_data: usize) void {
-        self.packed_data = packed_data;
+    inline fn onHeap(self: *Self, is_zst: bool) bool {
+        if (is_zst)
+            return false
+        else
+            return (self.packed_data & @as(usize, 1)) == 1;
     }
 
-    /// unpack*() are read-only functions used to read len or on_heap status
-    inline fn unpackLen(self: *Self) usize {
-        return self.packed_data >> 1;
-    }
-
-    inline fn unpackIsHeap(self: *Self) bool {
-        return (self.packed_data & 1) == 1;
-    }
-
-    /// Mutates the packed state:
-    /// - increase/decrease modify length 
-    /// - setHeap/unsetHeap modify heap flag
-    inline fn growLength(self: *Self) void {
-        var len: usize = self.unpackLen();
-        len += 1;
-        self.store(pack(len, self.unpackIsHeap()));
-    }
-
-    inline fn shrinkLength(self: *Self) void {
-        var len: usize = self.unpackLen();
-        len -= 1;
-        self.store(pack(len, self.unpackIsHeap()));
-    }
-
-    inline fn setHeap(self: *Self) void {
-        var on_heap: bool = self.unpackIsHeap();
-        on_heap = true;
-        self.store(pack(self.unpackLen(), on_heap));
-    }
-
-    inline fn unsetHeap(self: *Self) void {
-        var on_heap: bool = self.unpackIsHeap();
-        on_heap = false; 
-        self.store(pack(self.unpackLen(), on_heap));
+    inline fn value(self: *Self, is_zst: bool) usize {
+        if (is_zst)
+            return self.packed_data
+        else
+            return self.packed_data >> 1;
     }
 };
 

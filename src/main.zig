@@ -6,10 +6,10 @@ pub fn main() !void {
 
     var v = Vec.init();
 
-    v.push(10);
-    v.push(20);
-    v.push(30);
-    v.push(30);
+    try v.push(10);
+    try v.push(20);
+    try v.push(30);
+    try v.push(3073827);
 
     std.debug.print("len before = {}\n", .{v.len()});
 
