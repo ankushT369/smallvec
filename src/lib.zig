@@ -27,6 +27,14 @@ pub fn SmallVec(comptime T: type, comptime cap: usize) type {
         },
 
         /// User API for SmallVec
+        /// - init()
+        /// - push()
+        /// - pop()
+        /// - spilled()
+        /// - capacity()
+        /// - len()
+        /// - isEmpty()
+        /// - deinit()
         pub fn init() Self {
             return .{
                 .length = Packed.pack(0, false, isZst()),
@@ -36,7 +44,7 @@ pub fn SmallVec(comptime T: type, comptime cap: usize) type {
 
         pub fn push(self: *Self, value: T) !void {
             try self.writeMem(value);
-            self.setLen(self.length.value(isZst()) + 1);
+            self.setLen(self.len() + 1);
             return;
         }
 
@@ -45,19 +53,23 @@ pub fn SmallVec(comptime T: type, comptime cap: usize) type {
             if (self.isEmpty()) return ret;
 
             ret = self.readMem();
+            self.setLen(self.len() - 1);
             return ret;
         }
 
-        pub fn spilled(self: *Self) bool {
+        pub inline fn spilled(self: *Self) bool {
             return self.length.onHeap(isZst());
         }
 
-        pub fn capacity() usize {
+        pub inline fn capacity(self: *Self) usize {
             // Return based on the heap or stack.
-            return cap;
+            if (self.length.onHeap(isZst()))
+                return self.data.heap.len
+            else
+                return inlineCapacity();
         }
 
-        pub fn len(self: *Self) usize {
+        pub inline fn len(self: *Self) usize {
             return self.length.value(isZst());
         }
 
@@ -65,8 +77,15 @@ pub fn SmallVec(comptime T: type, comptime cap: usize) type {
             return self.len() == 0;
         }
 
-        inline fn writeMem(self: *Self, value: T) !void {
-            if (inlineCapacity() == self.length.value(isZst()))
+        pub fn deinit(self: *Self) void {
+            if (self.length.onHeap(isZst())) {
+                const allocator = std.heap.smp_allocator;
+                allocator.free(self.data.heap);
+            }
+        }
+
+        fn writeMem(self: *Self, value: T) !void {
+            if (inlineCapacity() == self.len())
                 if (!self.length.onHeap(isZst()))
                     try self.spillToHeap();
 
@@ -74,24 +93,29 @@ pub fn SmallVec(comptime T: type, comptime cap: usize) type {
                 // Do nothing
                 return;
             } else {
-                if (self.length.onHeap(isZst()))
-                    self.data.heap[self.length.value(isZst())] = value
-                else
-                    self.data.stack[self.length.value(isZst())] = value;
+                if (self.length.onHeap(isZst())) {
+                    if (self.len() == self.capacity()) {
+                        // Here I have to grow the dynamic array
+                        try self.growHeap();
+                        self.data.heap[self.len()] = value;
+                    } else {
+                        self.data.heap[self.len()] = value;
+                    }
+                } else self.data.stack[self.len()] = value;
 
                 return;
             }
         }
 
-        inline fn readMem(self: *Self) T {
+        fn readMem(self: *Self) T {
             if (isZst()) {
                 // right now return undefined
                 return undefined;
             } else {
                 if (self.length.onHeap(isZst()))
-                    return self.data.heap[self.length.value(isZst()) - 1]
+                    return self.data.heap[self.len() - 1]
                 else
-                    return self.data.stack[self.length.value(isZst()) - 1];
+                    return self.data.stack[self.len() - 1];
             }
         }
 
@@ -119,7 +143,7 @@ pub fn SmallVec(comptime T: type, comptime cap: usize) type {
             self.length = Packed.pack(new_len, on_heap, isZst());
         }
 
-        inline fn spillToHeap(self: *Self) !void {
+        fn spillToHeap(self: *Self) !void {
             const allocator = std.heap.smp_allocator;
 
             const old_len = self.len();
@@ -130,8 +154,26 @@ pub fn SmallVec(comptime T: type, comptime cap: usize) type {
 
             std.mem.copyForwards(T, heap_mem[0..old_len], stack_slice);
 
-            self.data.heap = heap_mem;
-            // I have stack memory on self.data.heap and size of cap(comp time)
+            self.data = .{ .heap = heap_mem };
+            self.setOnHeap();
+        }
+
+        fn growHeap(self: *Self) !void {
+            const allocator = std.heap.smp_allocator;
+
+            const old_len = self.len();
+            const old_cap = self.capacity();
+            const new_cap = old_cap * 2;
+
+            const old_heap = self.data.heap;
+
+            const new_heap = try allocator.alloc(T, new_cap);
+
+            std.mem.copyForwards(T, new_heap[0..old_len], old_heap[0..old_len]);
+
+            allocator.free(old_heap);
+
+            self.data = .{ .heap = new_heap };
             self.setOnHeap();
         }
     };
@@ -163,7 +205,7 @@ const Packed = struct {
             std.debug.assert(!on_heap);
             return .{ .packed_data = len };
         } else {
-            std.debug.assert(len < @as(usize, std.math.maxInt(isize)));
+            std.debug.assert(len < (1 << (@bitSizeOf(usize) - 1)));
             return .{
                 .packed_data = (len << 1) | @as(usize, @intFromBool(on_heap)),
             };

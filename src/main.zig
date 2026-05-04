@@ -10,6 +10,31 @@ pub fn main() !void {
     try v.push(20);
     try v.push(30);
     try v.push(3073827);
+    try v.push(3073827);
+    try v.push(3073827);
+    try v.push(3073827);
+    try v.push(3073827);
+    try v.push(3073827);
+    try v.push(3073827);
+    try v.push(3073827);
+    try v.push(3073827);
+    try v.push(3073827);
+    try v.push(3073827);
+    try v.push(3073827);
+    try v.push(3073827);
+    try v.push(3073827);
+    try v.push(3073827);
+    try v.push(3073827);
+    try v.push(3073827);
+    try v.push(3073827);
+    try v.push(3073827);
+    try v.push(3073827);
+    try v.push(3073827);
+    try v.push(3073827);
+    try v.push(3073827);
+    try v.push(3073827);
+
+    defer v.deinit();
 
     std.debug.print("len before = {}\n", .{v.len()});
 
@@ -18,4 +43,6 @@ pub fn main() !void {
     } else {
         std.debug.print("empty \n", .{});
     }
+
+    std.debug.print("cap: {}\n", .{v.capacity()});
 }
