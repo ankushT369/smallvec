@@ -17,17 +17,26 @@ const std = @import("std");
 /// - stack storage increases the size of the struct.
 /// - Large element types or large capacities can lead to high stack usage.
 pub fn SmallVec(comptime T: type, comptime cap: usize) type {
+    comptime {
+        if (cap > 32 and !std.math.isPowerOfTwo(cap)) {
+            @compileError("capacity > 32 must be power of 2");
+        }
+    }
+
     return struct {
         const Self = @This();
+        // Default it uses std.heap.smp_allocator
+        const AllocatorConfig = struct { allocator: std.mem.Allocator = std.heap.smp_allocator };
 
         length: Packed,
+        allocator: std.mem.Allocator,
         data: union(enum) {
             stack: [cap]T,
             heap: []T,
         },
 
         /// User API for SmallVec
-        /// - init()
+        /// - init(.{})
         /// - push()
         /// - pop()
         /// - spilled()
@@ -35,9 +44,10 @@ pub fn SmallVec(comptime T: type, comptime cap: usize) type {
         /// - len()
         /// - isEmpty()
         /// - deinit()
-        pub fn init() Self {
+        pub fn init(config: AllocatorConfig) Self {
             return .{
                 .length = Packed.pack(0, false, isZst()),
+                .allocator = config.allocator,
                 .data = .{ .stack = undefined },
             };
         }
@@ -144,12 +154,10 @@ pub fn SmallVec(comptime T: type, comptime cap: usize) type {
         }
 
         fn spillToHeap(self: *Self) !void {
-            const allocator = std.heap.smp_allocator;
-
             const old_len = self.len();
             const new_cap = 2 * inlineCapacity();
 
-            const heap_mem = try allocator.alloc(T, new_cap);
+            const heap_mem = try self.allocator.alloc(T, new_cap);
             const stack_slice = self.data.stack[0..old_len];
 
             std.mem.copyForwards(T, heap_mem[0..old_len], stack_slice);
@@ -159,19 +167,17 @@ pub fn SmallVec(comptime T: type, comptime cap: usize) type {
         }
 
         fn growHeap(self: *Self) !void {
-            const allocator = std.heap.smp_allocator;
-
             const old_len = self.len();
             const old_cap = self.capacity();
             const new_cap = old_cap * 2;
 
             const old_heap = self.data.heap;
 
-            const new_heap = try allocator.alloc(T, new_cap);
+            const new_heap = try self.allocator.alloc(T, new_cap);
 
             std.mem.copyForwards(T, new_heap[0..old_len], old_heap[0..old_len]);
 
-            allocator.free(old_heap);
+            self.allocator.free(old_heap);
 
             self.data = .{ .heap = new_heap };
             self.setOnHeap();
