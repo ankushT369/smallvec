@@ -93,6 +93,34 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    // Create a benchmark executable
+    const bench_exe = b.addExecutable(.{
+        .name = "benchmark",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/benchmark.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "smallvec", .module = mod },
+            },
+        }),
+    });
+
+    // Create a top-level step for benchmarking
+    const bench_step = b.step("benchmark", "Run benchmarks");
+
+    // Create a run artifact and make it depend on the install step
+    const run_bench = b.addRunArtifact(bench_exe);
+    run_bench.step.dependOn(b.getInstallStep());
+
+    // Allow passing arguments to the benchmark
+    if (b.args) |args| {
+        run_bench.addArgs(args);
+    }
+
+    // Make the benchmark step depend on running the benchmark executable
+    bench_step.dependOn(&run_bench.step);
+
     // exe.root_module.linkLibrary(smallvec);
     //
     // b.installArtifact(libsmallvec);
