@@ -3,9 +3,8 @@
 const std = @import("std");
 const sv = @import("smallvec");
 
-pub fn main() !void {
-    const Vec = sv.SmallVec(u32, 64);
-    const N: usize = 1_000_00;
+fn benchmark(comptime stack_size: usize, N: usize) !void {
+    const Vec = sv.SmallVec(u32, stack_size);
 
     // Initialize IO (required for Timestamp.now)
     var threaded_io: std.Io.Threaded = .init_single_threaded;
@@ -15,6 +14,8 @@ pub fn main() !void {
     // by default it uses std.heap.smp_allocator
     // var v = Vec.init(.{});
     defer v.deinit();
+
+    std.debug.print("Benchmarking {} elements of stack size {}\n", .{N, stack_size});
 
     // Benchmark PUSH
     const push_start = std.Io.Timestamp.now(io, .real);
@@ -48,4 +49,29 @@ pub fn main() !void {
 
     std.debug.print("Avg time per push: {} ns\n", .{avg_push});
     std.debug.print("Avg time per pop: {} ns\n", .{avg_pop});
+
+    std.debug.print("\n", .{});
+}
+
+pub fn main() !void {
+    // Benchmark total element size N = 1_000_00 and stack_size = 32
+    try benchmark(32, 1_000_00);
+
+    // Benchmark total element size N = 1_000_00 and stack_size = 64
+    try benchmark(64, 1_000_00);
+
+    // Benchmark total element size N = 1_000_00 and stack_size = 128
+    try benchmark(128, 1_000_00);
+
+    // Benchmark total element size N = 1_000_00 and stack_size = 256
+    try benchmark(256, 1_000_00);
+
+    // Benchmark total element size N = 1_000_00 and stack_size = 512
+    try benchmark(512, 1_000_00);
+
+    // Benchmark total element size N = 1_000_00 and stack_size = 1024
+    try benchmark(1024, 1_000_00);
+
+    // Benchmark total element size N = 1_000_00 and stack_size = 2048
+    try benchmark(2048, 1_000_00);
 }
