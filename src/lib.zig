@@ -87,10 +87,44 @@ pub fn SmallVec(comptime T: type, comptime cap: usize) type {
             return self.len() == 0;
         }
 
+        pub inline fn inlineSize() usize {
+            return inlineCapacity();
+        }
+
+        // pub fn truncate(self: *Self) void {
+        //
+        // }
+
+        pub fn shrinkToFit(self: *Self) void {
+            if (!self.spilled()) return;
+
+            const old_len: usize = self.len();
+            const heap_mem = self.data.heap;
+
+            if (inlineSize() >= old_len) {
+                // Get a writable pointer to the union's storage, interpreted as the stack array.
+                const stack_ptr: *[inlineCapacity()]T = @ptrCast(&self.data);
+                std.mem.copyForwards(T, stack_ptr[0..old_len], heap_mem[0..old_len]);
+
+                self.allocator.free(heap_mem);
+
+                self.data = .{ .stack = undefined };
+                self.setLen(old_len);
+
+                self.setInline();
+            } else if (self.capacity() > old_len) {
+                // ... future shrinking of heap allocation
+                // grow();
+            }
+        }
+
+        pub fn grow() void {}
+
+        pub fn tryGrow() void {}
+
         pub fn deinit(self: *Self) void {
             if (self.length.onHeap(isZst())) {
-                const allocator = std.heap.smp_allocator;
-                allocator.free(self.data.heap);
+                self.allocator.free(self.data.heap);
             }
         }
 
@@ -147,6 +181,7 @@ pub fn SmallVec(comptime T: type, comptime cap: usize) type {
             self.length = Packed.pack(self.len(), false, isZst());
         }
 
+        // Right now it doesn't expose this API
         inline fn setLen(self: *Self, new_len: usize) void {
             // std.debug.assert(new_len <= capacity());
             const on_heap: bool = self.length.onHeap(isZst());
