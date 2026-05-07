@@ -59,10 +59,12 @@ pub fn SmallVec(comptime T: type, comptime cap: usize) type {
         }
 
         pub fn pop(self: *Self) ?T {
-            var ret: ?T = null;
-            if (self.isEmpty()) return ret;
+            if (self.isEmpty()) {
+                @branchHint(.unlikely);
+                return null;
+            }
 
-            ret = self.readMem();
+            const ret = self.readMem();
             self.setLen(self.len() - 1);
             return ret;
         }
@@ -91,6 +93,16 @@ pub fn SmallVec(comptime T: type, comptime cap: usize) type {
             return inlineCapacity();
         }
 
+        // pub fn find(self: *Self, value: T) !usize {
+        //     if (self.length.onHeap(isZst())) {
+        //
+        //     }
+        //
+        //     // if (self.length.onHeap(isZst())) {
+        //     //
+        //     // }
+        // }
+
         // pub fn truncate(self: *Self) void {
         //
         // }
@@ -118,9 +130,9 @@ pub fn SmallVec(comptime T: type, comptime cap: usize) type {
             }
         }
 
-        pub fn grow() void {}
+        pub fn grow() void { }
 
-        pub fn tryGrow() void {}
+        pub fn tryGrow() void { }
 
         pub fn deinit(self: *Self) void {
             if (self.length.onHeap(isZst())) {
@@ -135,6 +147,8 @@ pub fn SmallVec(comptime T: type, comptime cap: usize) type {
 
             if (isZst()) {
                 // Do nothing
+                // Added branch hint to make CPU more predictable branching
+                @branchHint(.unlikely);
                 return;
             } else {
                 if (self.length.onHeap(isZst())) {
@@ -153,6 +167,8 @@ pub fn SmallVec(comptime T: type, comptime cap: usize) type {
 
         fn readMem(self: *Self) T {
             if (isZst()) {
+                // Added branch hint to make CPU more predictable branching
+                @branchHint(.unlikely);
                 // right now return undefined
                 return undefined;
             } else {
@@ -243,6 +259,7 @@ const Packed = struct {
     /// if the datatype len is zero then we store only len orelse bit packing.
     inline fn pack(len: usize, on_heap: bool, is_zst: bool) Self {
         if (is_zst) {
+            @branchHint(.unlikely);
             std.debug.assert(!on_heap);
             return .{ .packed_data = len };
         } else {
@@ -254,17 +271,17 @@ const Packed = struct {
     }
 
     inline fn onHeap(self: *Self, is_zst: bool) bool {
-        if (is_zst)
-            return false
-        else
-            return (self.packed_data & @as(usize, 1)) == 1;
+        if (is_zst) {
+            @branchHint(.unlikely);
+            return false;
+        } else return (self.packed_data & @as(usize, 1)) == 1;
     }
 
     inline fn value(self: *Self, is_zst: bool) usize {
-        if (is_zst)
-            return self.packed_data
-        else
-            return self.packed_data >> 1;
+        if (is_zst) {
+            @branchHint(.unlikely);
+            return self.packed_data;
+        } else return self.packed_data >> 1;
     }
 };
 
